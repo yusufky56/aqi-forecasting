@@ -1,0 +1,8 @@
+data/
+*.keras
+*.h5
+*.pkl
+__pycache__/
+*.pyc
+venv/
+.venv/
