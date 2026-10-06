@@ -9,70 +9,18 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import os
-ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(ROOT, "data")  # city_day.csv from the Kaggle dataset
+from data_prep import ROOT, load_dataset
 
 # =====================================================
-# 1. VERİYİ HAZIRLA (model.py ile aynı)
+# 1. VERİYİ HAZIRLA (train_models.py ile aynı, data_prep.py)
 # =====================================================
 print("="*80)
 print("VERİ HAZIRLANIYOR...")
 print("="*80)
 
-df = pd.read_csv(f"{DATA_PATH}/city_day.csv")
-df = df[df['City'] == 'Delhi'].copy()
-df['Date'] = pd.to_datetime(df['Date'])
-df = df.sort_values('Date').reset_index(drop=True)
-df = df.dropna(subset=['AQI'])
-
-feature_cols = ['PM2.5', 'PM10', 'NO', 'NO2', 'NOx', 'NH3', 'CO', 'SO2', 'O3', 'Benzene', 'Toluene', 'Xylene'] 
-data = df[feature_cols + ['AQI']].copy()
-data = data.interpolate(method='linear', limit_direction='both').ffill().bfill()
-
-for col in data.columns:
-    Q1, Q3 = data[col].quantile(0.25), data[col].quantile(0.75)
-    IQR = Q3 - Q1
-    data[col] = data[col].clip(Q1 - 3*IQR, Q3 + 3*IQR)
-
-for col in ['PM2.5', 'PM10', 'CO', 'NO2']:
-    data[f'{col}_roll3'] = data[col].rolling(3, min_periods=1).mean()
-    data[f'{col}_roll7'] = data[col].rolling(7, min_periods=1).mean()
-
-for col in ['PM2.5', 'PM10', 'AQI']:
-    data[f'{col}_lag1'] = data[col].shift(1)
-    data[f'{col}_lag3'] = data[col].shift(3)
-
-data['PM25_pct'] = data['PM2.5'].pct_change()
-data['PM10_pct'] = data['PM10'].pct_change()
-data['PM_ratio'] = data['PM2.5'] / (data['PM10'] + 1e-8)
-
-data = data.ffill().bfill().replace([np.inf, -np.inf], 0).fillna(0)
-
-features = [c for c in data.columns if c != 'AQI']
-X = data[features].values
-y = data['AQI'].values.reshape(-1, 1)
-
-scaler_X = RobustScaler()
-scaler_y = MinMaxScaler()
-X_scaled = scaler_X.fit_transform(X)
-y_scaled = scaler_y.fit_transform(y)
-
-SEQ_LEN = 14
-
-def create_sequences(X, y, seq_len):
-    Xs, ys = [], []
-    for i in range(seq_len, len(X)):
-        Xs.append(X[i-seq_len:i])
-        ys.append(y[i])
-    return np.array(Xs), np.array(ys).reshape(-1)
-
-X_seq, y_seq = create_sequences(X_scaled, y_scaled, SEQ_LEN)
-
-n = len(X_seq)
-train_end = int(n * 0.7)
-val_end = int(n * 0.85)
-
-X_test, y_test = X_seq[val_end:], y_seq[val_end:]
+ds = load_dataset()
+scaler_y = ds.scaler_y
+X_test, y_test = ds.X_test, ds.y_test
 print(f"Test seti: {len(X_test)} örnek")
 
 # =====================================================

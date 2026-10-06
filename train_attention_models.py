@@ -93,6 +93,14 @@ df = df.sort_values('Date').reset_index(drop=True)
 df = df.dropna(subset=['AQI'])
 print(f"Şehir: {SELECTED_CITY} | Kayıt: {len(df)}")
 
+# Kronolojik bölme noktaları baştan belirlenir; veriden öğrenen her adım
+# (imputer, winsorization, feature selection, scaler) yalnızca eğitim dönemine fit edilir.
+SEQUENCE_LENGTH = 21  # 3 hafta
+_n_seq = len(df) - SEQUENCE_LENGTH
+TRAIN_END = int(_n_seq * 0.7)
+VAL_END = int(_n_seq * 0.85)
+FIT_ROWS = TRAIN_END + SEQUENCE_LENGTH  # eğitim sekanslarının kapsadığı satırlar
+
 # Temel özellikler
 base_features = ['PM2.5', 'PM10', 'NO', 'NO2', 'NOx', 'NH3', 'CO', 'SO2', 'O3', 'Benzene', 'Toluene', 'Xylene']
 target = 'AQI'
@@ -102,12 +110,13 @@ target = 'AQI'
 # ============================================================================
 print("\n🔧 KNN Imputer ile eksik değer doldurma...")
 
-df_features = df[base_features + [target]].copy()
+df_features = df[base_features + [target]].reset_index(drop=True)
 
 # KNN Imputer (k=5, daha iyi interpolasyon)
 imputer = KNNImputer(n_neighbors=5, weights='distance')
+imputer.fit(df_features.iloc[:FIT_ROWS])
 df_imputed = pd.DataFrame(
-    imputer.fit_transform(df_features),
+    imputer.transform(df_features),
     columns=df_features.columns,
     index=df_features.index
 )
@@ -120,8 +129,9 @@ print(f"   Eksik değer kaldı: {df_imputed.isnull().sum().sum()}")
 print("🔧 Winsorization ile aykırı değer işleme...")
 
 def winsorize(series, limits=(0.01, 0.99)):
-    lower = series.quantile(limits[0])
-    upper = series.quantile(limits[1])
+    # Sınırlar yalnızca eğitim döneminden hesaplanır
+    lower = series.iloc[:FIT_ROWS].quantile(limits[0])
+    upper = series.iloc[:FIT_ROWS].quantile(limits[1])
     return series.clip(lower, upper)
 
 for col in df_imputed.columns:
@@ -246,7 +256,7 @@ df_eng = df_eng.ffill().bfill()
 # Hala eksik varsa medyan ile doldur
 for col in df_eng.columns:
     if df_eng[col].isnull().sum() > 0:
-        df_eng[col] = df_eng[col].fillna(df_eng[col].median())
+        df_eng[col] = df_eng[col].fillna(df_eng[col].iloc[:FIT_ROWS].median())
 
 print(f"\n✅ Toplam özellik sayısı: {len(df_eng.columns) - 1}")
 
@@ -266,7 +276,7 @@ y_all = df_eng[target].values
 print("🔧 Mutual Information ile feature selection...")
 
 selector = SelectKBest(score_func=mutual_info_regression, k=60)  # En iyi 60 özellik
-X_selected = selector.fit_transform(X_all, y_all)
+selector.fit(X_all[:FIT_ROWS], y_all[:FIT_ROWS])
 
 # Seçilen özellikleri al
 selected_mask = selector.get_support()
@@ -302,8 +312,10 @@ scaler_X = RobustScaler()
 scaler_y = MinMaxScaler()  # Log transform sonrası MinMax yeterli
 
 X = df_selected[selected_features].values
-X_scaled = scaler_X.fit_transform(X)
-y_scaled = scaler_y.fit_transform(y_log.reshape(-1, 1)).flatten()
+scaler_X.fit(X[:FIT_ROWS])
+scaler_y.fit(y_log[:FIT_ROWS].reshape(-1, 1))
+X_scaled = scaler_X.transform(X)
+y_scaled = scaler_y.transform(y_log.reshape(-1, 1)).flatten()
 
 print(f"✅ X shape: {X_scaled.shape}")
 print(f"✅ y shape: {y_scaled.shape}")
@@ -322,8 +334,6 @@ def create_sequences(X, y, seq_length):
         y_seq.append(y[i])
     return np.array(X_seq), np.array(y_seq)
 
-# Optimal sekans uzunluğu
-SEQUENCE_LENGTH = 21  # 3 hafta
 
 X_seq, y_seq = create_sequences(X_scaled, y_scaled, SEQUENCE_LENGTH)
 
@@ -339,9 +349,7 @@ print("7. VERİ BÖLME")
 print("=" * 70)
 
 # Zaman serisi için sıralı bölme
-n = len(X_seq)
-train_end = int(n * 0.7)
-val_end = int(n * 0.85)
+train_end, val_end = TRAIN_END, VAL_END
 
 X_train, y_train = X_seq[:train_end], y_seq[:train_end]
 X_val, y_val = X_seq[train_end:val_end], y_seq[train_end:val_end]

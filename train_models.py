@@ -29,71 +29,19 @@ plt.rcParams['axes.labelsize'] = 10
 print(f"TensorFlow: {tf.__version__}")
 
 import os
-ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(ROOT, "data")  # city_day.csv from the Kaggle dataset
-df = pd.read_csv(f"{DATA_PATH}/city_day.csv")
-print(f"Veri: {len(df):,}")
+from data_prep import POLLUTANTS as feature_cols, ROOT, SEQ_LEN, load_dataset
 
-df = df[df['City'] == 'Delhi'].copy()
-df['Date'] = pd.to_datetime(df['Date'])
-df = df.sort_values('Date').reset_index(drop=True)
-df = df.dropna(subset=['AQI'])
-print(f"Delhi: {len(df)}")
+RESULTS = os.path.join(ROOT, 'results')
+os.makedirs(RESULTS, exist_ok=True)
 
-feature_cols = ['PM2.5', 'PM10', 'NO', 'NO2', 'NOx', 'NH3', 'CO', 'SO2', 'O3', 'Benzene', 'Toluene', 'Xylene']
-data = df[feature_cols + ['AQI']].copy()
-data = data.interpolate(method='linear', limit_direction='both').ffill().bfill()
+ds = load_dataset()
+data, features = ds.data, ds.features
+scaler_X, scaler_y = ds.scaler_X, ds.scaler_y
+X_train, y_train = ds.X_train, ds.y_train
+X_val, y_val = ds.X_val, ds.y_val
+X_test, y_test = ds.X_test, ds.y_test
 
-for col in data.columns:
-    Q1, Q3 = data[col].quantile(0.25), data[col].quantile(0.75)
-    IQR = Q3 - Q1
-    data[col] = data[col].clip(Q1 - 3*IQR, Q3 + 3*IQR)
-
-for col in ['PM2.5', 'PM10', 'CO', 'NO2']:
-    data[f'{col}_roll3'] = data[col].rolling(3, min_periods=1).mean()
-    data[f'{col}_roll7'] = data[col].rolling(7, min_periods=1).mean()
-
-for col in ['PM2.5', 'PM10', 'AQI']:
-    data[f'{col}_lag1'] = data[col].shift(1)
-    data[f'{col}_lag3'] = data[col].shift(3)
-
-data['PM25_pct'] = data['PM2.5'].pct_change()
-data['PM10_pct'] = data['PM10'].pct_change()
-data['PM_ratio'] = data['PM2.5'] / (data['PM10'] + 1e-8)
-
-data = data.ffill().bfill().replace([np.inf, -np.inf], 0).fillna(0)
-
-features = [c for c in data.columns if c != 'AQI']
 print(f"Özellik: {len(features)}")
-
-X = data[features].values
-y = data['AQI'].values.reshape(-1, 1)
-
-scaler_X = RobustScaler()
-scaler_y = MinMaxScaler()
-X_scaled = scaler_X.fit_transform(X)
-y_scaled = scaler_y.fit_transform(y)
-
-SEQ_LEN = 14
-
-def create_sequences(X, y, seq_len):
-    Xs, ys = [], []
-    for i in range(seq_len, len(X)):
-        Xs.append(X[i-seq_len:i])
-        ys.append(y[i])
-    return np.array(Xs), np.array(ys).reshape(-1)
-
-X_seq, y_seq = create_sequences(X_scaled, y_scaled, SEQ_LEN)
-print(f"Sekans: {X_seq.shape}")
-
-n = len(X_seq)
-train_end = int(n * 0.7)
-val_end = int(n * 0.85)
-
-X_train, y_train = X_seq[:train_end], y_seq[:train_end]
-X_val, y_val = X_seq[train_end:val_end], y_seq[train_end:val_end]
-X_test, y_test = X_seq[val_end:], y_seq[val_end:]
-
 print(f"Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
 
 input_shape = (X_train.shape[1], X_train.shape[2])
@@ -168,7 +116,7 @@ def get_callbacks(name):
     return [
         EarlyStopping(monitor='val_loss', patience=25, restore_best_weights=True, verbose=1),
         ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=1e-7, verbose=1),
-        ModelCheckpoint(f'{name}_best.keras', monitor='val_loss', save_best_only=True, verbose=0)
+        ModelCheckpoint(os.path.join(ROOT, f'{name}_best.keras'), monitor='val_loss', save_best_only=True, verbose=0)
     ]
 
 EPOCHS = 150
@@ -320,7 +268,7 @@ axes[1, 1].set_xticklabels(models, rotation=15, ha='right')
 axes[1, 1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
-plt.savefig('01_training_comparison.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '01_training_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 01_training_comparison.png")
 
@@ -352,7 +300,7 @@ for idx, name in enumerate(['LSTM', 'GRU', 'Transformer']):
     axes[row, 1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('02_predictions_scatter.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '02_predictions_scatter.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 02_predictions_scatter.png")
 
@@ -377,7 +325,7 @@ for idx, name in enumerate(['LSTM', 'GRU', 'Transformer']):
 
 ax = axes[1, 1]
 bp_data = [residuals['LSTM'], residuals['GRU'], residuals['Transformer']]
-bp = ax.boxplot(bp_data, labels=['LSTM', 'GRU', 'Transformer'], patch_artist=True)
+bp = ax.boxplot(bp_data, tick_labels=['LSTM', 'GRU', 'Transformer'], patch_artist=True)
 for patch, name in zip(bp['boxes'], ['LSTM', 'GRU', 'Transformer']):
     patch.set_facecolor(colors[name])
     patch.set_alpha(0.7)
@@ -387,7 +335,7 @@ ax.set_ylabel('Residual')
 ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('03_residuals_analysis.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '03_residuals_analysis.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 03_residuals_analysis.png")
 
@@ -454,7 +402,7 @@ axes[1, 1].grid(True, alpha=0.3)
 axes[1, 1].set_xlim(0, 50)
 
 plt.tight_layout()
-plt.savefig('04_error_analysis.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '04_error_analysis.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 04_error_analysis.png")
 
@@ -484,7 +432,7 @@ axes[1].legend(loc='upper right')
 axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('05_ensemble_comparison.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '05_ensemble_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 05_ensemble_comparison.png")
 
@@ -497,7 +445,7 @@ sns.heatmap(corr_data, mask=mask, annot=True, fmt='.2f', cmap='RdYlBu_r',
             annot_kws={'size': 8}, cbar_kws={'shrink': 0.8})
 ax.set_title('Feature Correlation Heatmap', fontweight='bold', fontsize=14)
 plt.tight_layout()
-plt.savefig('06_correlation_heatmap.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '06_correlation_heatmap.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 06_correlation_heatmap.png")
 
@@ -592,14 +540,14 @@ ax4.text(0.05, 0.95, info_text, transform=ax4.transAxes, fontsize=10,
 ax4.axis('off')
 
 plt.tight_layout()
-plt.savefig('07_summary_dashboard.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(RESULTS, '07_summary_dashboard.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("✓ 07_summary_dashboard.png")
 
 lstm.save('lstm_model.keras')
 gru.save('gru_model.keras')
 transformer.save('transformer_model.keras')
-results_df.to_csv('model_results.csv')
+results_df.to_csv(os.path.join(RESULTS, 'model_results.csv'))
 
 import joblib
 joblib.dump(scaler_X, 'scaler_X.pkl')
