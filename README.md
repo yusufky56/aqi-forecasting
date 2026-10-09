@@ -66,3 +66,7 @@ Training: Adam (lr 5e-4), batch 16, up to 150 epochs with early stopping, L2 reg
 | `train_attention_models.py` | Variant with attention-augmented LSTM and GRU |
 | `statistical_analysis.py` | Bootstrap CIs and statistical comparison of the saved models |
 | `results/` | Metrics, test predictions and figures |
+
+## License
+
+[MIT](LICENSE). The MIT license covers the source code. Figures that appear in the published paper may be subject to the publisher's copyright and are not covered by this license. Datasets belong to their original authors.
